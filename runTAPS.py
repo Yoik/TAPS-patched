@@ -1,0 +1,167 @@
+from __future__ import print_function, division
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# =======================================================================================================================
+#                           import mpi4py for parallel computing
+# =======================================================================================================================
+import multiprocessing
+from mpi4py import MPI
+comm = MPI.COMM_WORLD
+#print("hello world")
+size = comm.Get_size()
+rank = comm.Get_rank()
+
+# ======================================================================================================================
+#                                       digits formater for iterations: "3 --> 03"
+# ======================================================================================================================
+def digits(s1):
+    s2 = "%.3d" % s1
+    return s2
+
+from TAPS import *
+from Confs import Confs
+import time
+import errno
+import copy
+import mdtraj as md
+import numpy as np
+import shutil
+from copy import deepcopy
+# =========================================================================================================
+#                                         multiple independent taps
+# =========================================================================================================
+n_start = 0
+n_taps = 1
+
+# =========================================================================================================
+#                                       number of iterations per taps
+# =========================================================================================================
+n_iter = 10
+iter_start = 21
+
+# =========================================================================================================
+#                                                input files
+# =========================================================================================================
+dirPars = '2A_LSD_80/pars'            # dirPar
+parFile = 'taps.par'        # parameters filename
+topFile = 'step7_10.gro'     # topology filename
+p0File = 'iter020.xtc'   # initial path file
+alignFile = 'align.ndx'      # atom index file for alignment
+rmsFile = 'rms.ndx'         # atom index file for rmsd computation
+print ("###DEBUG### Size:", size, "Rank:", rank, "begining.")
+for i in range(n_start,n_taps+n_start):
+    tapsName = '2A_LSD_80_1A_' + str(i)
+
+    #print("###DEBUG### Barrier before iteration")
+    #comm.Barrier()
+
+    #if rank == 0:
+    #    if not os.path.exists(tapsName):
+    #        os.makedirs(tapsName)
+    
+    if rank == 0 and not os.path.exists(tapsName):
+        try:
+            os.makedirs(tapsName)
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
+    #else:
+    #    time.sleep(5)
+    comm.Barrier()
+    #f_log = open(tapsName + '/' + tapsName + '_' + str(rank) + '.log', 'w+')
+    print(tapsName, ":")
+    #print(tapsName, ":", file=f_log)
+
+    print("  data initialization")
+    #print("  data initialization", file=f_log)
+    
+    if rank == 0:
+        t0 = time.time()
+        print("###DEBUG### Size:", size, "Rank:", rank, "running TAPS")
+        #print("###DEBUG###", dirPars, parFile, topFile, p0File, alignFile, rmsFile)
+        #print("###DEBUG###", dirPars, parFile, topFile, p0File, alignFile, rmsFile, file=f_log)
+        taps = TAPS(dirPars, parFile, topFile, p0File, alignFile, rmsFile)
+        te = time.time()
+        print("    time-cost: ", te - t0, ' sec')
+        #print("    time-cost: ", te - t0, ' sec', file=f_log)
+        pathList = []
+        refPath = copy.copy(taps.refPath)
+        pathList.append(refPath)
+        dirEvol = tapsName + '/paths'
+        if not os.path.exists(dirEvol):
+            os.makedirs(dirEvol)
+        refPath.pathName = 'iter' + digits(iter_start)
+        refPath.exportPath(dirEvol)
+    else:
+        taps = None
+        refPath = None
+    taps = comm.bcast(taps, root=0)
+    refPath = comm.bcast(refPath, root=0)
+    comm.Barrier()
+
+    for j in tqdm(range(iter_start, iter_start + n_iter), desc="Iteration", unit="iter"):
+        # ==================================================================================================
+        #                                          iteration index
+        # ==================================================================================================
+        iter = 'iter' + digits(j)
+        # ==================================================================================================
+        #                                        one taps iteration
+        # ==================================================================================================
+        dirMeta = tapsName + '/sampling/' + iter
+        print("  ", iter, ": Preparing MetaD")
+        #print("  ", iter, ": Preparing MetaD", file=f_log)
+        #dirRUNs = taps.meta_dirs(refPath, dirMeta)
+        comm.Barrier()
+        if rank == 0:
+            dirRUNs = taps.meta_dirs(refPath, dirMeta)
+            t0 = time.time()
+            #print("###DEBUG### Size:", size, "Rank:", rank, "running taps.meta_setup")
+            taps.meta_setup(refPath, dirMeta, dirRUNs)
+            t1 = time.time()
+            print('   timecost: ', t1 - t0, ' sec')
+            #print('   timecost: ', t1 - t0, ' sec', file=f_log)
+            print("  ", iter, ": Sampling MetaD")
+            #print("  ", iter, ": Sampling MetaD", file=f_log)
+        else:
+            #time.sleep(240)
+            dirRUNs = None
+        dirRUNs = comm.bcast(dirRUNs, root=0)
+        #print("###DEBUG### Barrier before meta_sample")
+        comm.Barrier()
+        if rank != 0:
+            time.sleep(10)
+            #print(" I am rank", rank, ", I slept 10 secs before meta_sample")
+        #print("###DEBUG### Size:", size, "Rank:", rank, "running taps.meta_sample")
+        taps.meta_sample(dirMeta, dirRUNs)
+        comm.Barrier()
+        #print("###DEBUG### Barrier after meta_sample")
+        #
+        t0 = time.time()
+        if rank == 0:
+            print('   timecost: ',t0 - t1, ' sec')
+            #print('   timecost: ',t0 - t1, ' sec', file=f_log)
+            print("  ", iter, ": Finding median(z) conformations, update path")
+            #print("  ", iter, ": Finding median(z) conformations, update path", file=f_log)
+        #print("###DEBUG### Barrier before meta_analyze")
+        comm.Barrier()
+        p_meta = taps.meta_analyze(dirMeta, dirRUNs)
+        #print("###DEBUG### Barrier after meta_analyze")
+        comm.Barrier()
+        t1 = time.time()
+
+        if rank == 0:
+            print('   timecost: ', t1 - t0, ' sec')
+            #print('   timecost: ', t1 - t0, ' sec', file=f_log)
+            p_meta.pathName = iter
+            p_meta.exportPath(dirEvol)
+            print(' ')
+            #print(' ', file=f_log)
+            refPath = deepcopy(p_meta)
+        else:
+            p_meta.pathName = None
+            p_meta.exportPath = None
+            refPath = None
+        p_meta = comm.bcast(p_meta, root=0)
+        refPath = comm.bcast(refPath, root=0)
+        comm.Barrier()

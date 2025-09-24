@@ -1,0 +1,11 @@
+/2A_LSD_80
+/2A_LSD_80_1A_0
+/2A_LSD_80_10ns_0
+/.git
+/_pycache_
+*.pyc
+*.slurm
+*.out
+*.log
+*.DS_Store
+
