@@ -51,12 +51,12 @@ threads = 1
 def digits(s1):
     s2 = "%.3d" % s1
     return s2
-
+    
 # ==================================================================================================================
-#                                       wrapper for a single run of metaD
+#                                       wrapper for a single run of umbrella sampling
 #                     engine-specific implementation of sampling is realized in this function
 # ==================================================================================================================
-def runMeta(dire, engine, runName, pluName, cvOut, trjName):
+def runUs(dire, engine, runName, pluName, cvOut, trjName):
     #lock is for parallel process
     if engine == 'GROMACS':
         # redirect gromacs stdout/stderr to per-node log file to avoid noisy shell output
@@ -102,26 +102,7 @@ def runMeta(dire, engine, runName, pluName, cvOut, trjName):
         os.remove(dire + '/bak_' + trjName)
     else:
         raise ValueError("MD engines other than GROMACS are not support yet")
-    
 
-# ==================================================================================================================
-#                                       wrapper for a single run of metaD
-#                     engine-specific implementation of sampling is realized in this function
-# ==================================================================================================================
-def runTMD(dire, engine, runName, pluName, trjName):
-    if engine == 'GROMACS':
-        logfile = os.path.join(dire, 'gromacs.log')
-        with _redirect_fds_to_file(logfile):
-            tmd = gromacs.run.MDrunner(dire, ntomp=threads, deffnm=runName, plumed=pluName)
-            tmd.run()
-        shutil.move(dire + '/' + trjName, dire + '/bak_' + trjName)
-        trjconv = gromacs.tools.Trjconv(s=dire + '/' + runName + '.tpr', f=dire + '/bak_' + trjName, \
-                                            o=dire + '/' + trjName, ur='compact', center=True, pbc='mol', \
-                                        input=('Protein', 'System'))
-        trjconv.run()
-        os.remove(dire + '/bak_' + trjName)
-    else:
-        raise ValueError("MD engines other than GROMACS are not support yet")
 # ======================================================================================================================
 #                               class TAPS: encoding methods for each iteration of TAPS
 # ======================================================================================================================
@@ -241,41 +222,6 @@ class TAPS(object):
         else:
             raise ValueError("Amount of sampling per taps iteration ('lenSample', unit: ps) not given in \
             parameter file %f" % (parFile))
-
-        # gaussian height for MetaD
-        match = re.search("gauHeight=.*\n", pars)
-        if match is not None:
-            self.gauHeight = float(re.split('=', match.group(0).rstrip('\n'))[1])
-        else:
-            raise ValueError("Height of gaussian for MetaDynamics (gh) not give in parameter file %s" % (parFile))
-
-        # gaussian width for MetaD
-        match = re.search("gauWidth=.*\n", pars)
-        if match is not None:
-            self.sigma = float(re.split('=', match.group(0).rstrip('\n'))[1])
-        else:
-            raise ValueError("Width of gaussian for MetaDynamics (sigma) not given in parameter file %s" % (parFile))
-
-        # deposition interval for MetaD
-        match = re.search("tauMetaD=.*\n", pars)
-        if match is not None:
-            self.tauMetaD = float(re.split('=', match.group(0).rstrip('\n'))[1])
-        else:
-            raise ValueError("Period for adding gaussians (tauMetaD) not given in parameter file %s" % (parFile))
-
-        # biasFactor for well-tempered MetaD
-        match = re.search("biasFactor=.*\n", pars)
-        if match is not None:
-            self.bf = int(re.split('=', match.group(0).rstrip('\n'))[1])
-        else:
-            raise ValueError("BiasFactor for wt-MetaDynamics (biasFactor, 2-10) not given  in parameter file %s" % (parFile))
-
-        # system temperature for well-tempered MetaD
-        match = re.search("temp=.*\n", pars)
-        if match is not None:
-            self.temp = int(re.split('=', match.group(0).rstrip('\n'))[1])
-        else:
-            raise ValueError("Temperature for wt-MetaDynamics (temp) not given in parameter file %s" % (parFile))
 
         # output frequency of trajectories
         match = re.search("freqTRJ=.*\n", pars)
@@ -406,7 +352,7 @@ class TAPS(object):
     #                   2. store node.pdb for sampling under each directory
     #                   3. specify the MetaD length by self.lenSample / path.n_nodes
     # ==================================================================================================================
-    def meta_dirs(self, path, dirMeta):
+    def us_dirs(self, path, dirMeta):
         # input dirMeta is the directory under which, the MetaD sampling and analysis will be performed
         # make sure the path is not empty for MetaD sampling
         if path is None:
@@ -431,15 +377,15 @@ class TAPS(object):
         return dirRUNs
 
     # ==================================================================================================================
-    #                                   Prepare plumed files for metaD sampling
+    #                                   Prepare plumed files for umbrella sampling
     #                       1. plumed input file
     #                       2. path pdb file for PCV definition in plumed2 format
     #                       NOTE: engine-specific running files is implemented in prepSampling()
     # ==================================================================================================================
-    def meta_setup(self, p_bak, dirMeta, dirRUNs):
+    def umbrella_setup(self, p_bak, dirMeta, dirRUNs):
         if not os.path.exists(dirMeta):
             os.makedirs(dirMeta)
-        for i in tqdm(range(len(dirRUNs)), desc="meta_setup (rank {})".format(rank), unit="node"):
+        for i in tqdm(range(len(dirRUNs)), desc="umbrella_setup (rank {})".format(rank), unit="node"):
             # prepare MD files
             runDir = self.dirRoot + '/' + dirMeta + '/' + dirRUNs[i]
             #print("###DEBUG### prepSampling")
@@ -470,12 +416,10 @@ class TAPS(object):
             print("WHOLEMOLECULES STRIDE=1 ENTITY0=%s" % atoms, file=f)
             print("p1: PATHMSD REFERENCE=%s LAMBDA=%f NEIGH_STRIDE=4 NEIGH_SIZE=8" \
                   % (p.pathName + '_plu.pdb', p.lamda), file=f)
-            print("METAD ARG=p1.sss SIGMA=%f HEIGHT=%f PACE=%d TEMP=%f BIASFACTOR=%d LABEL=metaU" \
-                  % (self.sigma, self.gauHeight, self.tauMetaD, self.temp, self.bf), file=f)
             print("UPPER_WALLS ARG=p1.zzz AT=%f KAPPA=%f EXP=2 EPS=1 OFFSET=0 LABEL=zwall" \
                   % (self.zw, self.zwK), file=f)
             print("RESTRAINT ARG=p1.sss KAPPA=%f AT=%f LABEL=res" % (self.kappa, s0), file=f)
-            print("PRINT ARG=p1.sss,p1.zzz,metaU.bias,res.bias,zwall.bias STRIDE=" \
+            print("PRINT ARG=p1.sss,p1.zzz,res.bias,zwall.bias STRIDE=" \
                   + str(self.freqTRJ) + " FILE=" + self.cvOut + " FMT=%8.16f", file=f)
             f.close()
 
@@ -489,26 +433,16 @@ class TAPS(object):
         else:
             raise ValueError("MD engines other than GROMACS are not support yet")
 
-    def prepTMD(self, node, dire):
-        if self.engine == 'GROMACS':
-            logfile = os.path.join(dire, 'gromacs.setup.log')
-            with _redirect_fds_to_file(logfile):
-                gromacs.setup.MD(dire, mdp=self.dirPar + '/' + self.groMDP, mainselection=None, struct=node, \
-                                 top=self.dirPar + '/' + self.groTOP, deffnm=self.runName, runtime=self.lenTMD, \
-                                 dt=self.timeStep, maxwarn=50)
-        else:
-            raise ValueError("MD engines other than GROMACS are not support yet")
-
     # ==================================================================================================================
-    #                                       perform the actual MetaD sampling
+    #                                       perform the actual umbrella sampling
     # ==================================================================================================================
-    def meta_sample(self, dirMeta, dirRUNs):
+    def umbrella_sample(self, dirMeta, dirRUNs):
         totTRJ = len(dirRUNs)  # the total number of trajectories to run
         # print("%d trajectories to sample in total." % totTRJ)
         if self.mode == 'serial':
-            for i in tqdm(range(totTRJ), desc="meta_sample", unit="job"):
+            for i in tqdm(range(totTRJ), desc="umbrella_sample", unit="job"):
                 runDir = self.dirRoot + '/' + dirMeta + '/' + dirRUNs[i]
-                runMeta(dire=runDir, engine=self.engine, runName=self.runName, pluName=self.pluName, cvOut=self.cvOut, trjName=self.trjName)
+                runUs(dire=runDir, engine=self.engine, runName=self.runName, pluName=self.pluName, cvOut=self.cvOut, trjName=self.trjName)
         elif self.mode == 'parallel':
             # record = []
             # lock = multiprocessing.Lock()
@@ -523,325 +457,13 @@ class TAPS(object):
             N_jobs = totTRJ
             # compute job ids for this rank to avoid overlapping work
             my_tids = list(range(rank, N_jobs, size))
-            for tid in tqdm(my_tids, desc="meta_sample rank{}".format(rank), unit="job"):
+            for tid in tqdm(my_tids, desc="umbrella_sample rank{}".format(rank), unit="job"):
                 runDir = self.dirRoot + '/' + dirMeta + '/' + dirRUNs[tid]
                 _tqdm.write("+++DEBUG+++ runMeta {} of {} , size {} , rank {}".format(tid, N_jobs, size, rank))
-                runMeta(dire=runDir, engine=self.engine, runName=self.runName, pluName=self.pluName,
+                runUs(dire=runDir, engine=self.engine, runName=self.runName, pluName=self.pluName,
                         cvOut=self.cvOut, trjName=self.trjName)
         elif self.mode == 'qjobs':
             raise ValueError("qjobs version to be implemented")
-
-    # ==================================================================================================================
-    #                                    Prepare directories & files for tMD (for reparameterization)
-    #                   after inserting nodes, generate an list of nodes to insert
-    #                   1. make directories
-    #                   2. store node.pdb for sampling under each directory
-    #                   3. specify the MetaD length by self.lenSample / path.n_nodes
-    # ==================================================================================================================
-    def tmd_dirs(self, list_pairs, dirMeta):
-        # input dirMeta is the directory under which, the targeted MD sampling will be performed
-        if list_pairs is None:
-            raise ValueError("list_pairs is empty, no tMD will be performed for path-reparameterization")
-        # list to record directories for running
-        dirRUNs = []
-        for i in tqdm(range(len(list_pairs)), desc="tmd_dirs", unit="pair"):
-            dirPair = 'pair' + digits(i)
-            longDirPair = self.dirRoot + '/' + dirMeta + '/tmd4repar/' + dirPair
-            if not os.path.exists(longDirPair):
-                os.makedirs(longDirPair)
-            # store 1st node of the pair as starting conformation for targeted MD
-            nd = list_pairs[i].slice(0)
-            dirRUNs.append('tmd4repar/' + dirPair)
-            nodeFile = longDirPair + '/' + self.nodeName
-            nd.save(nodeFile)
-            # store 2nd node of the pair as target conformation for targeted MD
-            targetFile = longDirPair + '/target.pdb'
-            list_pairs[i].slice(1).save_plu2(targetFile,self.pcvInd)
-        return dirRUNs
-
-    # ==================================================================================================================
-    #                                   Prepare plumed files for targeted MD sampling
-    #                       1. plumed input file
-    #                       NOTE: engine-specific running files is implemented in prepTMD()
-    # ==================================================================================================================
-    def tmd_setup(self, dirMeta, dirRUNs):
-        if not os.path.exists(dirMeta):
-            os.makedirs(dirMeta)
-        for i in tqdm(range(len(dirRUNs)), desc="tmd_setup", unit="pair"):
-            # prepare MD files
-            runDir = self.dirRoot + '/' + dirMeta + '/' + dirRUNs[i]
-            self.prepTMD(runDir + '/' + self.nodeName, runDir)
-            # prepare plumed input file for distance calculation
-            pluInput = runDir + '/' + self.pluName
-            f = open(pluInput, 'w+')
-            atoms = ''
-            for j in range(len(self.pcvInd.atomSlice) - 1):
-                atoms = atoms + str(self.pcvInd.atomSlice[j] + 1) + ','
-            atoms = atoms + str(self.pcvInd.atomSlice[len(self.pcvInd.atomSlice) - 1] + 1)
-            print("WHOLEMOLECULES STRIDE=1 ENTITY0=%s" % atoms, file=f)
-            print("rmsd: RMSD REFERENCE=target.pdb TYPE=OPTIMAL", file=f)
-            print("restraint: ...", file=f)
-            print("MOVINGRESTRAINT", file=f)
-            print("  ARG=rmsd", file=f)
-            print("  AT0=0 STEP0=0 KAPPA0=0", file=f)
-            # length of targeted MD
-            numSteps = int(self.lenTMD / self.timeStep / 2)
-            print("  AT1=0 STEP1=%d KAPPA1=%d" % (numSteps,self.kTMD), file=f)
-            print("  AT2=0 STEP2=%d KAPPA2=%d" % (numSteps*2,self.kTMD), file=f)
-            print("...", file=f)
-            print("PRINT ARG=rmsd STRIDE=" + str(self.freqTRJ) + " FILE=" + self.cvOut + " FMT=%8.16f", file=f)
-            f.close()
-
-
-    # ==================================================================================================================
-    #                                       perform the actual MetaD sampling
-    # ==================================================================================================================
-    def tmd_sample(self, dirMeta, dirTMD):
-        totTRJ = len(dirTMD)  # the total number of trajectories to run
-        # print("%d trajectories to sample in total." % totTRJ)
-        if self.mode == 'serial':
-            for i in tqdm(range(totTRJ), desc="tmd_sample", unit="job"):
-                runDir = self.dirRoot + '/' + dirMeta + '/' + dirTMD[i]
-                runTMD(dire=runDir, engine=self.engine, runName=self.runName, pluName=self.pluName, trjName=self.trjName)
-        elif self.mode == 'parallel':
-            # record = []
-            # lock = multiprocessing.Lock()
-            # pool = multiprocessing.Pool(processes=8)
-            # runDir_list = []
-            # for i in range(totTRJ):
-            #     runDir = self.dirRoot + '/' + dirMeta + '/' + dirTMD[i]
-            #     pool.apply_async(runTMD, args=(runDir, self.engine, self.runName, self.pluName, self.trjName))
-            # pool.close()
-            # pool.join()
-            N_jobs = totTRJ
-            my_tids = list(range(rank, N_jobs, size))
-            for tid in tqdm(my_tids, desc="tmd_sample rank{}".format(rank), unit="job"):
-                runDir = self.dirRoot + '/' + dirMeta + '/' + dirTMD[tid]
-                runTMD(dire=runDir, engine=self.engine, runName=self.runName, pluName=self.pluName,
-                       trjName=self.trjName)
-                _tqdm.write("+++DEBUG+++ runTMD {} of {} , size {} , rank {}".format(tid, N_jobs, size, rank))
-        elif self.mode == 'qjobs':
-            raise ValueError("qjobs version to be implemented")
-        ## cat all tmd conformations together into one trajectory for reparameterization
-        #listTMD = []
-        #for i in range(totTRJ):
-        #    trjDir = self.dirRoot + '/' + dirMeta + '/' + dirTMD[i]
-        #    trjTMD = Confs.traj2conf(md.load(trjDir + '/' + self.trjName , top=self.topFile))
-        #    listTMD.append(trjTMD)
-        #samplesTMD = Confs.merge(listTMD)
-        #trjTMD = self.dirRoot + '/' + dirMeta + '/tmd.xtc'
-        #samplesTMD.save(trjTMD)
-        ## return the trajectories location of the sampled TMD conformations
-        #return trjTMD
-
-    # ==================================================================================================================
-    #                                     Analyze metaD trajectories to update path
-    #   1. filter metaD trajectories
-    #       select only frames whose restraining potential on PCV-s are wall potenial on PCV-z are within tolerance
-    #       This helps remove frames with high restraining or wall potential that may be ""unphysical".
-    #   2. select median(z) from filtered data, find geometric centroid of the median(z) conformations in each metaD
-    #       NOTE: pre-process median(z) conformations for clustering (TODO: to be removed in future versions)
-    #   3. reorder median(z) nodes via concorde (Travelling-salesman solver, implemented in C++)
-    #   4. path reparameterization (truncate at terminal nodes and insert conformations between distant neighbor nodes)
-    # ==================================================================================================================
-    def meta_analyze(self, dirMeta, dirSamples):
-
-        # moving to metaD directory
-        os.chdir(self.dirRoot + '/' + dirMeta)
-
-        listFilter = []
-        list_medz = []
-        if rank == 0:
-            print("      Filtering metaD trajectories: restraining potential must not exceed ", self.rsTol)
-            print("      Finding median(z) conformations")
-        print("+++DEBUG+++ meta_analyze", "size", size, ", rank", rank)
-
-        comm.Barrier()
-        if rank == 0:
-            for i in range(len(dirSamples)):
-                trjDir = self.dirRoot + '/' + dirMeta + '/' + dirSamples[i]
-                print("        in " + dirSamples[i])
-                meta = md.load(trjDir + '/' + self.trjName, top=self.topFile)
-                # colvar_filter is generated after sampling
-                cvs = np.loadtxt(trjDir + '/colvar_filter', dtype=float)
-                z = cvs[:, 2]  # third column is pcv-z
-                rsPol = cvs[:, 4]  # fifth column is the value of the restraining potential
-                zwPol = cvs[:, 5]  # sixth column is the value of the wall potential on pcv-z
-                with np.errstate(invalid='ignore'):
-                    cuts = np.where((rsPol >= self.rsTol) | (zwPol >= self.rsTol))[0]
-                if len(cuts) > 0:
-                    cut = cuts[0]
-                    if cut < meta.n_frames:
-                        z_filter = z[0:cut]
-                    else:
-                        z_filter = z[0:meta.n_frames]
-                else:
-                    cut = meta.n_frames
-                    z_filter = z[0:meta.n_frames]
-                ranz = np.absolute(np.max(z_filter) - np.min(z_filter)) / 10.0
-
-                # ==========================================================================================================
-                #                       find median(z) conformations from filtered trajectories
-                #   NOTE: median(z) values given by 'numpy.median(z_filter)' is not an element of the array 'z_filter'
-                #   NOTE: This causes troubles when z is unevenly distributed in the array 'z_filter'
-                #   NOTE: Therefore, we use an straightforward implementation for median(z) as the following:
-                # ==========================================================================================================
-                medz = np.sort(z_filter)[len(z_filter) // 2]
-                ind_medz = np.where(np.absolute(z_filter - medz) < ranz)[0]
-
-                # ==========================================================================================================
-                # extract median(z) confs
-                # ==========================================================================================================
-                conf_medz = meta.slice(ind_medz)
-                list_medz.append(Confs.traj2conf(conf_medz).geoCentroid(self.pcvInd))
-
-                # ==========================================================================================================
-                # extract "physical" conformations from  as input for path re-parameterization
-                # ==========================================================================================================
-                ind_filter = np.array(range(cut))
-                filtTRJ = meta.slice(ind_filter)
-                # print("      Storing filtered conformations")
-                filtTRJ.save(trjDir + '/' + self.trjFilter)
-
-            # ==============================================================================================================
-            # store medz centroids per metaD trajectory
-            # ==============================================================================================================
-            print("      Storing median(z) nodes of this iteration")
-            mz = Confs.merge(list_medz)
-            pmz = Path('mz_tsp', self.pcvInd, mz)
-            pmz.nodes.save(self.dirRoot + '/' + dirMeta + '/mz.xtc')
-            pmz.reOrder(truncate=False, dire=self.dirRoot + '/' + dirMeta)
-            pmz.exportPath(self.dirRoot + '/' + dirMeta)
-
-            # ==============================================================================================================
-            # path re-parameterization, step 1. truncation
-            # ==============================================================================================================
-            print("      Truncating path: remove segments beyond the two fixed ends")
-            p_trunc = pmz.truncate(self.initNode, self.finalNode)
-            p_trunc.exportPath(self.dirRoot + '/' + dirMeta)
-
-            # ==============================================================================================================
-            # path re-parameterization, step 2. insert conformation between distant neighbor nodes
-            # ==============================================================================================================
-            # For inserting comformations between distant nodes
-            #   filtered samples of both the current and last round should be used as candidates
-            #     this is to ensure that there are always sufficient input conformations for path reparameterization
-            #       and avoids the path to be broken ( which allows a larger zwall and quicker convergence)
-            #         as long as the first rounds gives connected path, this strategy should work fine,
-            #           because although this round has broken path, once conformations are inserted from previous round
-            #             sampling of next round will definitely include connecting conformations
-            # It is also possible to store all sampled data for path-reparameterization, but this is too memory-consuming
-            # ==============================================================================================================
-            print("      Inserting MetaD conformations into median(z) nodes from the latest two rounds")
-            p_in = p_trunc
-            for i in tqdm(range(len(dirSamples)), desc="Current round trajs", unit="traj"):
-                trjDir = self.dirRoot + '/' + dirMeta + '/' + dirSamples[i]
-                for data in tqdm(
-                    md.iterload(trjDir + '/' + self.trjFilter, chunk=1000, top=self.topFile),
-                    desc=f"Frames in {dirSamples[i]}", unit="chunk", leave=False
-                ):
-                    p_in = p_in.insert(data, self.tolDist, self.devMID, self.tolCos)
-            if self.lastMeta is not None:
-                for i in tqdm(range(len(self.lastSamples)), desc="Last round trajs", unit="traj"):
-                    trjDir = self.dirRoot + '/' + self.lastMeta + '/' + self.lastSamples[i]
-                    for data in tqdm(
-                        md.iterload(trjDir + '/' + self.trjFilter, chunk=1000, top=self.topFile),
-                        desc=f"Frames in {self.lastSamples[i]}", unit="chunk", leave=False
-                    ):
-                        p_in = p_in.insert(data, self.tolDist, self.devMID, self.tolCos)
-            p_in.pathName="mz_tsp_in"
-            p_in.exportPath(self.dirRoot + '/' + dirMeta)
-
-            # ==============================================================================================================
-            # path re-parameterization, step 3. increase tolDist*=2 shortcut the path
-            # ==============================================================================================================
-            print("      Straightening path:")
-            print("        [a] Short-cutting path by ", self.tolDist, " x ", self.stf)
-            p_rc = p_in.rmClose(self.tolDist * self.stf)
-            p_rc.pathName = "mz_tsp_in_rc"
-            p_rc.exportPath(self.dirRoot + '/' + dirMeta)
-
-            # ==============================================================================================================
-            # path re-parameterization, step 4. insert conformation between distant neighbor nodes
-            # ==============================================================================================================
-            print("        [b] Re-inserting MetaD conformation into straightened path")
-            p_in = p_rc
-            for i in tqdm(range(len(dirSamples)), desc="Current round trajs", unit="traj"):
-                trjDir = self.dirRoot + '/' + dirMeta + '/' + dirSamples[i]
-                for data in tqdm(
-                    md.iterload(trjDir + '/' + self.trjFilter, chunk=1000, top=self.topFile),
-                    desc=f"Frames in {dirSamples[i]}", unit="chunk", leave=False
-                ):
-                    p_in = p_in.insert(data, self.tolDist, self.devMID, self.tolCos)
-
-            if self.lastMeta is not None:
-                for i in tqdm(range(len(self.lastSamples)), desc="Last round trajs", unit="traj"):
-                    trjDir = self.dirRoot + '/' + self.lastMeta + '/' + self.lastSamples[i]
-                    for data in tqdm(
-                        md.iterload(trjDir + '/' + self.trjFilter, chunk=1000, top=self.topFile),
-                        desc=f"Frames in {self.lastSamples[i]}", unit="chunk", leave=False
-                    ):
-                        p_in = p_in.insert(data, self.tolDist, self.devMID, self.tolCos)
-            p_in.pathName = "mz_tsp_in_st"
-            p_in.exportPath(self.dirRoot + '/' + dirMeta)
-
-        # ==============================================================================================================
-        # path re-parameterization, step 5. if there are still distant neighbor nodes, extra targeted MD is performed
-        # ==============================================================================================================
-            p_tmd = p_in
-            listFar = p_in.distantNeighbors(self.tolDist)
-        else:
-            listFar = None
-        listFar = comm.bcast(listFar, root=0)
-        #comm.Barrier()
-
-        if len(listFar) > 0:
-            if rank == 0:
-                print("      Distant nodes are still present\n        Perform targeted MD for reparameterization.")
-                dirTMDs = self.tmd_dirs(listFar, dirMeta)
-                self.tmd_setup(dirMeta,dirTMDs)
-            else:
-                dirTMDs = None
-            dirTMDs = comm.bcast(dirTMDs, root=0)
-            comm.Barrier()
-            print("###DEBUG### Barrier before tmd_sample")
-            dataTMD = self.tmd_sample(dirMeta,dirTMDs)
-            comm.Barrier()
-            print("###DEBUG### Barrier after tmd_sample")
-            # use the tMD samples to insert
-            if rank == 0:
-                for i in tqdm(range(len(dirTMDs)), desc="TMD trajs", unit="traj"):
-                    trjDir = self.dirRoot + '/' + dirMeta + '/' + dirTMDs[i]
-                    for data in tqdm(
-                        md.iterload(trjDir + '/' + self.trjName, chunk=1000, top=self.topFile),
-                        desc=f"Frames in {dirTMDs[i]}", unit="chunk", leave=False
-                    ):
-                        p_tmd = p_tmd.insert(data, self.tolDist, self.devMID, self.tolCos)
-        if rank == 0:
-            p_tmd.pathName = "mz_tsp_in_st_tmd"
-            p_tmd.exportPath(self.dirRoot + '/' + dirMeta)
-
-            # ==============================================================================================================
-            # path re-parameterization, step 6. use tolDist to shortcut the path
-            # ==============================================================================================================
-            print("      Short-cutting path by ", self.tolDist)
-            p_meta = p_tmd.rmClose(self.tolDist)
-            p_meta.exportPath(self.dirRoot + '/' + dirMeta)
-
-            # ==============================================================================================================
-            # store the directory of this round for next iterations
-            # ==============================================================================================================
-            self.lastMeta = dirMeta
-            self.lastSamples = dirSamples
-
-            # return to root directory
-            os.chdir(self.dirRoot)
-        else:
-            p_meta = None
-        p_meta = comm.bcast(p_meta, root=0)
-        comm.Barrier()
-        return p_meta
-
 
 @contextmanager
 def _redirect_fds_to_file(path):

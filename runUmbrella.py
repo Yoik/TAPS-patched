@@ -35,7 +35,7 @@ def digits(s1):
 # - Confs: 构象容器或相关数据结构
 # - 常用科学计算与文件操作库：mdtraj, numpy, shutil, copy 等
 # ======================================================================================================================
-from TAPS import *
+from UmSa import *
 from Confs import Confs
 import time
 import errno
@@ -54,8 +54,8 @@ from copy import deepcopy
 n_start = 0
 n_taps = 1
 
-n_iter = 10
-iter_start = 21
+n_iter = 1
+iter_start = 0
 
 # =========================================================================================================
 # 输入文件与目录约定
@@ -64,10 +64,10 @@ iter_start = 21
 # - p0File: 初始路径（如某一迭代的 .xtc 轨迹）
 # - alignFile/rmsFile: 对齐与 RMSD 计算的原子索引文件
 # =========================================================================================================
-dirPars = '2A_LSD_80/pars'
+dirPars = '2A_LSD_80/umbrella'
 parFile = 'taps.par'
 topFile = 'step7_10.gro'
-p0File = 'iter020.xtc'
+p0File = 'iter030.xtc'
 alignFile = 'align.ndx'
 rmsFile = 'rms.ndx'
 
@@ -77,7 +77,7 @@ rmsFile = 'rms.ndx'
 # - 仅 rank==0 负责创建目录与重型初始化，其余进程等待并接收广播的上下文
 # =========================================================================================================
 for i in range(n_start, n_taps + n_start):
-    tapsName = '2A_LSD_80_1A_' + str(i)
+    tapsName = '2A_LSD_80_1A_30ns_UmSa_test' + str(i)
 
     # 仅主进程创建工作目录，其他进程同步等待
     if rank == 0 and not os.path.exists(tapsName):
@@ -125,7 +125,7 @@ for i in range(n_start, n_taps + n_start):
     comm.Barrier()
 
     # =====================================================================================================
-    # 迭代循环：每次迭代包含 MetaD 的准备、采样与分析，然后更新路径
+    # 迭代循环：每次迭代包含 Umbrella 的准备、采样与分析，然后更新路径
     # - 目录结构：sampling/iterXYZ 存放该迭代的运行数据；paths 存放演化的路径快照
     # - rank 角色分工：
     #   * rank==0：生成运行目录、写入输入、触发采样的前置准备、最终导出路径
@@ -135,19 +135,19 @@ for i in range(n_start, n_taps + n_start):
         # 迭代标签与目录
         iter = 'iter' + digits(j)
         dirMeta = tapsName + '/sampling/' + iter
-        print("  ", iter, ": Preparing MetaD")
+        print("  ", iter, ": Preparing Umbrella")
 
         comm.Barrier()
         if rank == 0:
             # 1) 生成每个子运行目录与输入配置（如不同种子或不同窗口）
-            dirRUNs = taps.meta_dirs(refPath, dirMeta)
+            dirRUNs = taps.us_dirs(refPath, dirMeta)
 
-            # 2) 写入/准备 MetaD 所需文件（如 PLUMED 输入、mdp、脚本等）
+            # 2) 写入/准备 Umbrella 所需文件（如 PLUMED 输入、mdp、脚本等）
             t0 = time.time()
-            taps.meta_setup(refPath, dirMeta, dirRUNs)
+            taps.umbrella_setup(refPath, dirMeta, dirRUNs)
             t1 = time.time()
             print('   timecost: ', t1 - t0, ' sec')
-            print("  ", iter, ": Sampling MetaD")
+            print("  ", iter, ": Umbrella Sampling")
         else:
             dirRUNs = None
 
@@ -159,8 +159,8 @@ for i in range(n_start, n_taps + n_start):
         if rank != 0:
             time.sleep(10)
 
-        # 3) 执行 MetaD 采样（各 rank 协同/分工）
-        taps.meta_sample(dirMeta, dirRUNs)
+        # 3) 执行 Umbrella 采样（各 rank 协同/分工）
+        taps.umbrella_sample(dirMeta, dirRUNs)
         comm.Barrier()
 
         # 采样结束到分析开始的耗时记录起点
@@ -169,27 +169,4 @@ for i in range(n_start, n_taps + n_start):
             print('   timecost: ', t0 - t1, ' sec')
             print("  ", iter, ": Finding median(z) conformations, update path")
 
-        comm.Barrier()
-
-        # 4) 分析采样结果：提取代表性构象（如中位数 z），构建新的路径对象
-        p_meta = taps.meta_analyze(dirMeta, dirRUNs)
-        comm.Barrier()
-        t1 = time.time()
-
-        if rank == 0:
-            # 记录分析耗时，导出更新后的路径快照，并将其作为下一次迭代的参考
-            print('   timecost: ', t1 - t0, ' sec')
-            p_meta.pathName = iter
-            p_meta.exportPath(dirEvol)
-            print(' ')
-            refPath = deepcopy(p_meta)  # 深拷贝保证后续修改不会影响已导出的快照
-        else:
-            # 非主进程不做导出，仅参与计算；占位字段置空避免误用
-            p_meta.pathName = None
-            p_meta.exportPath = None
-            refPath = None
-
-        # 广播本次迭代的路径对象与新参考路径，保持所有进程状态同步
-        p_meta = comm.bcast(p_meta, root=0)
-        refPath = comm.bcast(refPath, root=0)
         comm.Barrier()
