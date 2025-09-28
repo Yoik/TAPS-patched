@@ -6,16 +6,16 @@ import mdtraj as md
 import numpy as np
 import shutil
 
-dirPars = 'pars'            # dirPar
-parFile = 'taps.par'        # parameters filename
-topFile = 'system.pdb'     # topology filename
-p0File = 'p0_bb_rc020.xtc'   # initial path file
-alignFile = 'align.ndx'      # atom index file for alignment
-rmsFile =  'rms.ndx'         # atom index file for rmsd computation
+dirPars = '2A_LSD_80/pars'
+parFile = 'taps.par'
+topFile = 'step7_10.gro'
+p0File = 'aligned_first50.xtc'
+alignFile = 'align.ndx'
+rmsFile = 'rms.ndx'
 
 taps = TAPS(dirPars, parFile, topFile, p0File, alignFile, rmsFile)
 p0 = taps.refPath
-p1 = p0.rmClose(0.028)
-p1.nodes.save('p2_rc028.xtc')
-p1.pcv()
+p1 = p0.rmClose(0.09)
+p1.nodes.save('aligned_first50_rc009.xtc')
+p1.pcv(dire=dirPars)
 

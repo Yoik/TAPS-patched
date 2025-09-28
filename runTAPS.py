@@ -54,8 +54,8 @@ from copy import deepcopy
 n_start = 0
 n_taps = 1
 
-n_iter = 10
-iter_start = 21
+n_iter = 15
+iter_start = 0
 
 # =========================================================================================================
 # 输入文件与目录约定
@@ -67,7 +67,7 @@ iter_start = 21
 dirPars = '2A_LSD_80/pars'
 parFile = 'taps.par'
 topFile = 'step7_10.gro'
-p0File = 'iter020.xtc'
+p0File = 'aligned_first50_rc009.xtc'
 alignFile = 'align.ndx'
 rmsFile = 'rms.ndx'
 
@@ -77,7 +77,7 @@ rmsFile = 'rms.ndx'
 # - 仅 rank==0 负责创建目录与重型初始化，其余进程等待并接收广播的上下文
 # =========================================================================================================
 for i in range(n_start, n_taps + n_start):
-    tapsName = '2A_LSD_80_1A_' + str(i)
+    tapsName = '2A_LSD_80_rc009_' + str(i)
 
     # 仅主进程创建工作目录，其他进程同步等待
     if rank == 0 and not os.path.exists(tapsName):

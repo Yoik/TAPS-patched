@@ -1,10 +1,8 @@
-/2A_LSD_80
-/2A_LSD_80_1A_0
-/2A_LSD_80_10ns_0
-/2A_LSD_80_1A_30ns_UmSa_0
-/2A_LSD_80_1A_30ns_UmSa_test0
-/.git
-/_pycache_
+*/
+!concorde/
+!pars/
+!test/
+
 *.pyc
 *.slurm
 *.out

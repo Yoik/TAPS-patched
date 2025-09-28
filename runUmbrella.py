@@ -44,6 +44,21 @@ import mdtraj as md
 import numpy as np
 import shutil
 from copy import deepcopy
+import subprocess, sys
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--projName", type=str, default="2A_LSD_80_1A_30ns_UmSa_test")
+parser.add_argument("--n_taps", type=int, default=1)
+parser.add_argument("--n_iter", type=int, default=1)
+parser.add_argument("--iter_start", type=int, default=0)
+parser.add_argument("--dirPars", type=str, default="2A_LSD_80/umbrella")
+parser.add_argument("--parFile", type=str, default="taps.par")
+parser.add_argument("--topFile", type=str, default="step7_10.gro")
+parser.add_argument("--p0File", type=str, default="iter030.xtc")
+parser.add_argument("--alignFile", type=str, default="align.ndx")
+parser.add_argument("--rmsFile", type=str, default="rms.ndx")
+args = parser.parse_args()
 
 # =========================================================================================================
 # 全局控制参数：taps 实例与迭代设置
@@ -51,11 +66,11 @@ from copy import deepcopy
 # - n_iter: 每个实例的迭代次数
 # - iter_start: 起始迭代编号（用于从某一迭代中断点继续）
 # =========================================================================================================
+projName = args.projName
 n_start = 0
-n_taps = 1
-
-n_iter = 1
-iter_start = 0
+n_taps = args.n_taps
+n_iter = args.n_iter
+iter_start = args.iter_start
 
 # =========================================================================================================
 # 输入文件与目录约定
@@ -64,12 +79,12 @@ iter_start = 0
 # - p0File: 初始路径（如某一迭代的 .xtc 轨迹）
 # - alignFile/rmsFile: 对齐与 RMSD 计算的原子索引文件
 # =========================================================================================================
-dirPars = '2A_LSD_80/umbrella'
-parFile = 'taps.par'
-topFile = 'step7_10.gro'
-p0File = 'iter030.xtc'
-alignFile = 'align.ndx'
-rmsFile = 'rms.ndx'
+dirPars = args.dirPars
+parFile = args.parFile
+topFile = args.topFile
+p0File = args.p0File
+alignFile = args.alignFile
+rmsFile = args.rmsFile
 
 # =========================================================================================================
 # 主循环：遍历多个独立的 taps 实例
@@ -77,7 +92,7 @@ rmsFile = 'rms.ndx'
 # - 仅 rank==0 负责创建目录与重型初始化，其余进程等待并接收广播的上下文
 # =========================================================================================================
 for i in range(n_start, n_taps + n_start):
-    tapsName = '2A_LSD_80_1A_30ns_UmSa_test' + str(i)
+    tapsName = projName + str(i)
 
     # 仅主进程创建工作目录，其他进程同步等待
     if rank == 0 and not os.path.exists(tapsName):
@@ -144,7 +159,7 @@ for i in range(n_start, n_taps + n_start):
 
             # 2) 写入/准备 Umbrella 所需文件（如 PLUMED 输入、mdp、脚本等）
             t0 = time.time()
-            taps.umbrella_setup(refPath, dirMeta, dirRUNs)
+            dirRUNs = taps.umbrella_setup(refPath, dirMeta, dirRUNs)
             t1 = time.time()
             print('   timecost: ', t1 - t0, ' sec')
             print("  ", iter, ": Umbrella Sampling")
@@ -153,8 +168,6 @@ for i in range(n_start, n_taps + n_start):
 
         # 广播子运行目录信息，确保所有进程知道该迭代的布局
         dirRUNs = comm.bcast(dirRUNs, root=0)
-        comm.Barrier()
-
         # 为避免资源争抢或文件系统延迟，非主进程可稍作等待（经验性缓冲）
         if rank != 0:
             time.sleep(10)
