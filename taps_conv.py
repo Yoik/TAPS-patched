@@ -14,33 +14,33 @@ def digits(s1):
 # =========================================================================================================
 #                                       number of iterations per taps
 # =========================================================================================================
-n_iter = 6
+n_iter = 14
 
-# =========================================================================================================
+# ===============================================================================================
 #                                                input files
 # =========================================================================================================
-dirPars = './pars'            # dirPar
-parFile = 'taps.par'        # parameters filename
-topFile = 'system.pdb'     # topology filename
-p0File = 'tmdAB_k1e5_rc050.xtc'    # initial path file
-alignFile = 'align.ndx'     # atom index file for alignment
-rmsFile =  'rms.ndx'        # atom index file for rmsd computation
-
+dirPars = '2A_LSD_80/pars'
+parFile = 'taps.par'
+topFile = 'step7_10.gro'
+p0File = 'raw_first50_rc009.xtc'
+alignFile = 'align.ndx'
+rmsFile = 'rms.ndx'
+# =========================================================================================================
 taps = TAPS(dirPars, parFile, topFile, p0File, alignFile, rmsFile)
 refPath = taps.refPath
-refPath.pcv() # for computing lamda
+refPath.pcv(dire=dirPars) # for computing lamda
 
-dirEvol = '../paths'
+dirEvol = './2A_LSD_80_rc009_raw0/paths'
 # ======================================================================================================
 #       All iterations finished, deciding convergence by looking av(z) per path again initial path
 #           re-grow path with data from that the round with median(av(z)) as final output path
 # ======================================================================================================
 # compute pcv-z of all paths with respect to initial path, find average value of z
 z_av = np.zeros([n_iter+1, 2])
-for j in range(1, n_iter+1):
+for j in range(1, n_iter + 1):
     iter = 'iter' + digits(j)
     p_nodes = md.load(dirEvol + '/' + iter + '.xtc', top=dirPars + '/' + topFile)
-    s,z = refPath.pcv(p_nodes)
+    s,z = refPath.pcv(dirEvol, p_nodes)
     np.savetxt(dirEvol + "/s_" + iter + ".dat", s, fmt='%8.8f')
     np.savetxt(dirEvol + "/z_" + iter + ".dat", z, fmt='%8.8f')                
     z_av[j, 0] = j

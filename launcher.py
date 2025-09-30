@@ -1,14 +1,14 @@
 import subprocess, sys
 
 # 统一参数配置
-projName = "2A_LSD_80_rc009_10ns_UmSa_"
+projName = "2A_LSD_80_rc009_US_raw_"
 n_taps = 1
 n_iter = 1
 iter_start = 0
 dirPars = "2A_LSD_80/umbrella"
 parFile = "taps.par"
 topFile = "step7_10.gro"
-p0File = "iter010.xtc"
+p0File = "iter014.xtc"
 alignFile = "align.ndx"
 rmsFile = "rms.ndx"
 

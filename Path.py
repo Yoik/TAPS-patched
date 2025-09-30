@@ -288,37 +288,58 @@ class Path(object):
     # Truncate the nodes of path beyond the two fixed terminals
     # ==================================================================================================================
     def truncate(self, iNode, fNode):
+        # 如果没有提供起点或终点节点，直接报错
         if (iNode is None) or (fNode is None):
             raise ValueError("the two terminal nodes must be provided for truncation")
         else:
-            #initNode = deepcopy(iNode)
-            #finNode = deepcopy(fNode)
+            # 起点和终点节点（这里直接引用，而不是深拷贝）
             initNode = iNode
             finNode = fNode
-            sub_nodes=self.nodes.atom_slice(self.pcvInd.atomSlice)
+
+            # 从路径节点中提取与 pcvInd 对应的原子子集
+            sub_nodes = self.nodes.atom_slice(self.pcvInd.atomSlice)
             sub_i = initNode.atom_slice(self.pcvInd.atomSlice)
             sub_f = finNode.atom_slice(self.pcvInd.atomSlice)
-            sub_nodes.superpose(sub_i,0,self.pcvInd.align)
-            r1 = md.rmsd(sub_nodes,sub_i,0,self.pcvInd.rms)
+
+            # 将路径节点对齐到起点构象（superpose）
+            sub_nodes.superpose(sub_i, 0, self.pcvInd.align)
+            # 计算路径中每个节点与起点的 RMSD
+            r1 = md.rmsd(sub_nodes, sub_i, 0, self.pcvInd.rms)
+            # 找到与起点最接近的节点索引
             si = np.argmin(r1)
-            sub_nodes.superpose(sub_f,0, self.pcvInd.align)
-            r2 = md.rmsd(sub_nodes,sub_f,0,self.pcvInd.rms)
+
+            # 将路径节点对齐到终点构象
+            sub_nodes.superpose(sub_f, 0, self.pcvInd.align)
+            # 计算路径中每个节点与终点的 RMSD
+            r2 = md.rmsd(sub_nodes, sub_f, 0, self.pcvInd.rms)
+            # 找到与终点最接近的节点索引
             ti = np.argmin(r2)
+
+            # 根据起点索引和终点索引的相对位置来截取路径
             if si > ti:
-                # add self.initNode and self.finNode at terminals
+                # 如果起点在终点之后（索引顺序反了）
+                # 构造新节点列表：终点 → 中间片段 → 起点
                 listNodes = []
                 listNodes.append(finNode)
                 listNodes.append(self.nodes.slice(np.arange(ti, si + 1)))
                 listNodes.append(initNode)
+                # 合并成新的节点集合
                 newNodes = Confs.merge(listNodes)
             else:
-                # add self.initNode and self.finNode at terminals
+                # 如果起点在终点之前（正常顺序）
+                # 构造新节点列表：起点 → 中间片段 → 终点
                 listNodes = []
                 listNodes.append(initNode)
                 listNodes.append(self.nodes.slice(np.arange(si, ti + 1)))
                 listNodes.append(finNode)
+                # 合并成新的节点集合
                 newNodes = Confs.merge(listNodes)
-            newPath = Path(self.pathName+'_tr',self.pcvInd,newNodes)
+
+            # 用截断后的节点集合构造一个新的 Path 对象
+            # 并在原路径名后加上 "_tr" 后缀
+            newPath = Path(self.pathName + '_tr', self.pcvInd, newNodes)
+
+        # 返回新的截断路径
         return newPath
 
     # ==================================================================================================================

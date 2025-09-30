@@ -155,13 +155,10 @@ for i in range(n_start, n_taps + n_start):
         comm.Barrier()
         if rank == 0:
             # 1) 生成每个子运行目录与输入配置（如不同种子或不同窗口）
-            dirRUNs = taps.us_dirs(refPath, dirMeta)
+            dirRUNs, win_map = taps.us_dirs(refPath, dirMeta)
 
             # 2) 写入/准备 Umbrella 所需文件（如 PLUMED 输入、mdp、脚本等）
-            t0 = time.time()
-            dirRUNs = taps.umbrella_setup(refPath, dirMeta, dirRUNs)
-            t1 = time.time()
-            print('   timecost: ', t1 - t0, ' sec')
+            taps.umbrella_setup(refPath, dirMeta, dirRUNs, win_map)
             print("  ", iter, ": Umbrella Sampling")
         else:
             dirRUNs = None
@@ -177,9 +174,7 @@ for i in range(n_start, n_taps + n_start):
         comm.Barrier()
 
         # 采样结束到分析开始的耗时记录起点
-        t0 = time.time()
         if rank == 0:
-            print('   timecost: ', t0 - t1, ' sec')
             print("  ", iter, ": Finding median(z) conformations, update path")
 
         comm.Barrier()

@@ -67,7 +67,7 @@ iter_start = 0
 dirPars = '2A_LSD_80/pars'
 parFile = 'taps.par'
 topFile = 'step7_10.gro'
-p0File = 'aligned_first50_rc009.xtc'
+p0File = 'raw_first50_rc009.xtc'
 alignFile = 'align.ndx'
 rmsFile = 'rms.ndx'
 
@@ -77,7 +77,7 @@ rmsFile = 'rms.ndx'
 # - 仅 rank==0 负责创建目录与重型初始化，其余进程等待并接收广播的上下文
 # =========================================================================================================
 for i in range(n_start, n_taps + n_start):
-    tapsName = '2A_LSD_80_rc009_' + str(i)
+    tapsName = '2A_LSD_80_rc009_raw' + str(i)
 
     # 仅主进程创建工作目录，其他进程同步等待
     if rank == 0 and not os.path.exists(tapsName):

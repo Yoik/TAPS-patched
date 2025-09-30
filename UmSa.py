@@ -353,28 +353,51 @@ class TAPS(object):
     #                   3. specify the MetaD length by self.lenSample / path.n_nodes
     # ==================================================================================================================
     def us_dirs(self, path, dirMeta):
-        # input dirMeta is the directory under which, the MetaD sampling and analysis will be performed
-        # make sure the path is not empty for MetaD sampling
         if path is None:
             raise ValueError("Path '%s' is empty, can not be sampled" % path.pathName)
-        # list to record directories for running
-        dirRUNs = []
-        for n in tqdm(range(path.n_nodes), desc="meta_dirs", unit="node"):
-            dirNode = 'node' + digits(n)
-            longDirNode = self.dirRoot + '/' + dirMeta + '/' + dirNode
-            if not os.path.exists(longDirNode):
-                try:
-                    os.makedirs(longDirNode)
-                except OSError as error:
-                    if error.errno != errno.EEXIST:
-                        raise
+
+        # 确保 meta 目录存在
+        metaDirAbs = os.path.join(self.dirRoot, dirMeta)
+        os.makedirs(metaDirAbs, exist_ok=True)
+
+        # === 第一步：先跑一次 pcv 初始化 lamda ===
+        # 这里 trj=None，会对整个路径计算 lamda 并写参考文件
+        path.pcv(metaDirAbs)
+
+        all_s0 = []
+        # === 第二步：收集所有节点的 s0（此时 lamda 已经有值了） ===
+        for n in range(path.n_nodes):
             nd = path.nodes.slice(n)
+            s0, z0 = path.pcv(metaDirAbs, nd)  # 这里用已有 lamda
+            all_s0.append((n, s0))
+
+        # === 第三步：生成 0.5 Å 间隔的目标窗口 ===
+        s_values = [s for _, s in all_s0]
+        s_min, s_max = min(s_values), max(s_values)
+        target_points = np.arange(s_min, s_max + 0.5, 0.5)
+
+        dirRUNs = []
+        win_map = {}
+        import shutil
+        for s_new in target_points:
+            # 找到最近的已有节点
+            nearest, s_nearest = min(all_s0, key=lambda x: abs(x[1] - s_new))
+            dirNode = "win_%d" % int(round(s_new * 100))
+            longDirNode = os.path.join(metaDirAbs, dirNode)
+
+            if not os.path.exists(longDirNode):
+                os.makedirs(longDirNode)
+                # 保存最近节点的构象作为初始结构
+                nd = path.nodes.slice(nearest)
+                nodeFile = os.path.join(longDirNode, self.nodeName)
+                nd.save(nodeFile)
+
             dirRUNs.append(dirNode)
-            nodeFile = longDirNode + '/' + self.nodeName
-            nd.save(nodeFile)
-        # deciding length of each meta using the total amount of sampling
-        self.lenMetaD = self.lenSample / path.n_nodes
-        return dirRUNs
+            win_map[dirNode] = s_new
+
+        # 每个窗口分配的采样时间
+        self.lenMetaD = self.lenSample
+        return dirRUNs, win_map
 
     # ==================================================================================================================
     #                                   Prepare plumed files for umbrella sampling
@@ -382,88 +405,39 @@ class TAPS(object):
     #                       2. path pdb file for PCV definition in plumed2 format
     #                       NOTE: engine-specific running files is implemented in prepSampling()
     # ==================================================================================================================
-    def fill_gaps(self, s0_list, delta=0.5):
-        # s0_list: [(node_index, s0_value), ...]
-        s0_list = sorted(s0_list, key=lambda x: x[1])
-        new_points = []
-        for (i1, s1), (i2, s2) in zip(s0_list[:-1], s0_list[1:]):
-            gap = s2 - s1
-            if gap > delta:
-                n_insert = int(np.floor(gap / delta))
-                for k in range(1, n_insert+1):
-                    s_new = s1 + k*delta
-                    # 由最近的 node 负责
-                    nearest = i1 if abs(s_new - s1) < abs(s2 - s_new) else i2
-                    new_points.append((nearest, s_new))
-        return new_points
-
-    def umbrella_setup(self, p_bak, dirMeta, dirRUNs):
+    def umbrella_setup(self, p_bak, dirMeta, dirRUNs, win_map):
         if not os.path.exists(dirMeta):
             os.makedirs(dirMeta)
 
         p = self.refPath
-        all_s0 = []
 
-        # === 第一步：收集所有节点的 s0 ===
-        for i in tqdm(range(len(dirRUNs)), desc="umbrella_setup (rank {})".format(rank), unit="node"):
-            runDir = self.dirRoot + '/' + dirMeta + '/' + dirRUNs[i]
-            self.prepSampling(runDir + '/' + self.nodeName, runDir)
+        # 用 tqdm 包裹循环，显示 rank 和进度
+        for dirName in tqdm(dirRUNs, desc=f"meta_setup (rank {rank})", unit="win"):
+            runDir = os.path.join(self.dirRoot, dirMeta, dirName)
+            self.prepSampling(os.path.join(runDir, self.nodeName), runDir)
 
-            p.exportPCV(dirMeta + '/' + dirRUNs[i])
-            p.pcv(dirMeta + '/' + dirRUNs[i])
+            # 导出路径参考文件 & 计算 lamda
+            p.exportPCV(os.path.join(dirMeta, dirName))
+            p.pcv(os.path.join(dirMeta, dirName))
 
-            node = md.load(runDir + '/' + self.nodeName, top=self.topFile)
-            s0, z0 = p.pcv(dirMeta + '/' + dirRUNs[i], node)
-            all_s0.append((i, s0))
+            # 加载该窗口的初始构象
+            s_target = win_map[dirName]
 
-            # === 写原始节点的 plumed 文件 ===
-            pluInput = dirMeta + '/' + dirRUNs[i] + '/' + self.pluName
+            # 写 plumed 文件
+            pluInput = os.path.join(runDir, self.pluName)
             with open(pluInput, 'w+') as f:
                 atoms = ','.join(str(a+1) for a in self.pcvInd.atomSlice)
                 print("WHOLEMOLECULES STRIDE=1 ENTITY0=%s" % atoms, file=f)
                 print("p1: PATHMSD REFERENCE=%s LAMBDA=%f NEIGH_STRIDE=4 NEIGH_SIZE=8" %
-                      (p.pathName + '_plu.pdb', p.lamda), file=f)
+                    (p.pathName + '_plu.pdb', p.lamda), file=f)
                 print("UPPER_WALLS ARG=p1.zzz AT=%f KAPPA=%f EXP=2 EPS=1 OFFSET=0 LABEL=zwall" %
-                      (self.zw, self.zwK), file=f)
+                    (self.zw, self.zwK), file=f)
                 print("RESTRAINT ARG=p1.sss KAPPA=%f AT=%f LABEL=res" %
-                      (self.kappa, s0), file=f)
+                    (self.kappa, s_target), file=f)
                 print("PRINT ARG=p1.sss,p1.zzz,res.bias,zwall.bias STRIDE=%d FILE=%s FMT=%%8.16f" %
-                      (self.freqTRJ, self.cvOut), file=f)
-
-        # === 第二步：检查间隙并补点 ===
-        new_points = self.fill_gaps(all_s0, delta=0.5)
-
-        # === 第三步：为补点生成新目录和 plumed 文件 ===
-        import shutil
-        for nearest, s_new in new_points:
-            # 原始节点目录
-            srcDir = self.dirRoot + '/' + dirMeta + '/' + dirRUNs[nearest]
-            # 新节点目录名（相对）
-            newDirName = dirRUNs[nearest] + "_extra_%d" % int(s_new * 100)
-            # 新节点目录（绝对路径）
-            newDir = self.dirRoot + '/' + dirMeta + '/' + newDirName
-
-            if not os.path.exists(newDir):
-                shutil.copytree(srcDir, newDir)
-
-                # 修改 plumed 文件中的 AT
-                pluInput = newDir + '/' + self.pluName
-                with open(pluInput, 'r') as f:
-                    lines = f.readlines()
-                with open(pluInput, 'w') as f:
-                    for line in lines:
-                        if line.startswith("RESTRAINT ARG=p1.sss"):
-                            f.write("RESTRAINT ARG=p1.sss KAPPA=%f AT=%f LABEL=res\n" %
-                                    (self.kappa, s_new))
-                        else:
-                            f.write(line)
-
-                # 把新目录名加入 dirRUNs，方便 umbrella_sample 识别
-                dirRUNs.append(newDirName)
-
-        # 返回更新后的 dirRUNs（可选，如果你希望在外部直接用）
-        return dirRUNs
-
+                    (self.freqTRJ, self.cvOut), file=f)
+                f.close()
+    
     def prepSampling(self, node, dire):
         if self.engine == 'GROMACS':
             logfile = os.path.join(dire, 'gromacs.setup.log')
